@@ -1,8 +1,11 @@
+from pathlib import Path
 import logging
 import os
 import tempfile
 
+import requests
 from celery import shared_task
+from django.conf import settings
 from eventlog.events import EventGroup
 
 from exodus.core.static_analysis import StaticAnalysis
@@ -53,3 +56,22 @@ def recompute_all_reports():
             report.found_trackers.set(trackers)
             report.save()
             ev.info('Successfully updated trackers list of "{}"'.format(handle), initiator=__name__)
+
+
+@shared_task
+def update_fdroid_data():
+    ev = EventGroup()
+    ev.info('Downloading F-Droid index', initiator=__name__)
+
+    exodus_dir_path = '{}/.exodus'.format(Path.home())
+    try:
+        if not os.path.exists(exodus_dir_path):
+            os.mkdir(exodus_dir_path)
+
+        r = requests.get('{}/index.xml'.format(settings.FDROID_MIRROR))
+        open('{}/index.xml'.format(exodus_dir_path), 'wb').write(r.content)
+
+        ev.info('Update of F-Droid index complete', initiator=__name__)
+    except Exception as e:
+        ev.error('Error while downloading Fdroid index', initiator=__name__)
+        ev.error(str(e), initiator=__name__)

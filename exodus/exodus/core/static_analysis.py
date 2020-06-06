@@ -3,7 +3,9 @@ from __future__ import absolute_import, unicode_literals
 
 import logging
 import os
+import requests
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -11,7 +13,8 @@ from django.conf import settings
 from gpapi.googleplay import GooglePlayAPI, RequestError
 from minio.error import (ResponseError)
 
-from exodus_core.analysis.static_analysis import StaticAnalysis as CoreSA
+from .core_sa import StaticAnalysis as CoreSA
+# from exodus_core.analysis.static_analysis import StaticAnalysis as CoreSA
 from trackers.models import Tracker
 
 
@@ -26,15 +29,16 @@ class StaticAnalysis(CoreSA):
         self.signatures = Tracker.objects.order_by('name')
         self._compile_signatures()
 
-    def get_icon_and_phash(self, storage, icon_name):
+    def get_icon_and_phash(self, storage, icon_name, source):
         """
         Get the application icon, save it to Minio and get its perceptual hash
         :param storage: minio storage helper
         :param icon_name: file name for the icon
+        :param icon_name: source of the app (ex: google, fdroid)
         :return: icon name and phash if success, otherwise empty strings
         """
         with NamedTemporaryFile() as f:
-            icon_path = self.save_icon(f.name)
+            icon_path = self.save_icon(f.name, source)
             if icon_path is None:
                 return ('', '')
 
@@ -70,7 +74,66 @@ class StaticAnalysis(CoreSA):
         return info
 
 
-def download_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
+def download_apk(storage, handle, tmp_dir, apk_name, apk_tmp, source="google"):
+    ret = False
+    if source == "google":
+        logging.info("Download from gplay")
+        ret = download_google_apk(storage, handle, tmp_dir, apk_name, apk_tmp)
+    elif source == "fdroid":
+        logging.info("Download from F-Droid")
+        ret = download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp)
+    return ret
+
+
+def download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
+    """
+    Download the APK from F-Droid for the given handle.
+    :param storage: minio storage helper
+    :param handle: application handle to download
+    :param tmp_dir: directory to save the APK in
+    :param apk_name: name of the APK in Minio storage
+    :param apk_tmp: apk temporary name
+    :return: True if succeed, False otherwise
+    """
+    index_file_path = '{}/.exodus/index.xml'.format(Path.home())
+    if not os.path.isfile(index_file_path):
+        logging.error("Could not find Fdroid index file")
+        return False
+
+    tree = ET.parse(index_file_path)
+    root = tree.getroot()
+    url = ''
+    for child in root:
+        if child.tag != 'repo':
+            if child.attrib['id'] == handle:
+                for package in child.findall('package'):
+                    url = '{}/{}'.format(settings.FDROID_MIRROR, package.find('apkname').text)
+                    break
+    if url:
+        if not os.path.exists(tmp_dir):
+            os.mkdir(tmp_dir)
+
+        try:
+            r = requests.get(url)
+            open(apk_tmp, 'wb').write(r.content)
+        except Exception:
+            logging.error("Could not download '{}'".format(handle))
+            return False
+
+    apk = Path(apk_tmp)
+    if apk.is_file():
+        try:
+            storage.put_file(apk_tmp, apk_name)
+            return True
+        except ResponseError as err:
+            logging.error(err)
+            return False
+
+    logging.error("Could not download '{}'".format(handle))
+    return False
+
+
+def download_google_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
     """
     Download the APK from Google Play for the given handle.
     :param storage: minio storage helper
