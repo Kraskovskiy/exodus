@@ -13,8 +13,7 @@ from django.conf import settings
 from gpapi.googleplay import GooglePlayAPI, RequestError
 from minio.error import (ResponseError)
 
-from .core_sa import StaticAnalysis as CoreSA
-# from exodus_core.analysis.static_analysis import StaticAnalysis as CoreSA
+from exodus_core.analysis.static_analysis import StaticAnalysis as CoreSA
 from trackers.models import Tracker
 
 
