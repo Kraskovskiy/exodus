@@ -1,4 +1,3 @@
-from pathlib import Path
 import logging
 import os
 import tempfile
@@ -63,15 +62,15 @@ def update_fdroid_data():
     ev = EventGroup()
     ev.info('Downloading F-Droid index', initiator=__name__)
 
-    exodus_dir_path = '{}/.exodus'.format(Path.home())
-    try:
-        if not os.path.exists(exodus_dir_path):
-            os.mkdir(exodus_dir_path)
+    with tempfile.NamedTemporaryFile() as f:
+        try:
+            r = requests.get('{}/index.xml'.format(settings.FDROID_MIRROR))
+            open(f.name, 'wb').write(r.content)
 
-        r = requests.get('{}/index.xml'.format(settings.FDROID_MIRROR))
-        open('{}/index.xml'.format(exodus_dir_path), 'wb').write(r.content)
+            storage_helper = RemoteStorageHelper()
+            storage_helper.put_file(f.name, 'fdroid_index.xml')
 
-        ev.info('Update of F-Droid index complete', initiator=__name__)
-    except Exception as e:
-        ev.error('Error while downloading Fdroid index', initiator=__name__)
-        ev.error(str(e), initiator=__name__)
+            ev.info('Update of F-Droid index complete', initiator=__name__)
+        except Exception as e:
+            ev.error('Error while downloading Fdroid index', initiator=__name__)
+            ev.error(str(e), initiator=__name__)

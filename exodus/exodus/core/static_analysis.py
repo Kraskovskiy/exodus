@@ -6,6 +6,7 @@ import os
 import requests
 import shutil
 import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -14,6 +15,7 @@ from gpapi.googleplay import GooglePlayAPI, RequestError
 from minio.error import (ResponseError)
 
 from exodus_core.analysis.static_analysis import StaticAnalysis as CoreSA
+from exodus.core.storage import RemoteStorageHelper
 from trackers.models import Tracker
 
 
@@ -34,22 +36,28 @@ class StaticAnalysis(CoreSA):
         :param storage: minio storage helper
         :param icon_name: file name for the icon
         :param icon_name: source of the app (ex: google, fdroid)
-        :return: icon name and phash if success, otherwise empty strings
+        :return: icon phash if success, otherwise None
         """
         with NamedTemporaryFile() as f:
-            icon_path = self.save_icon(f.name, source)
-            if icon_path is None:
-                return ('', '')
+            icon_path = self.save_icon(f.name)
+            if not icon_path:
+                logging.warning('Downloading icon from store website')
+                try:
+                    get_icon_from_store(self.get_package(), source, f.name)
+                    logging.debug('Icon downloaded from {}'.format(source))
+                except Exception as e:
+                    logging.error(e)
+                    return None
 
             try:
                 storage.put_file(f.name, icon_name)
             except ResponseError as err:
                 logging.info(err)
-                icon_name = ''
+                return None
 
             icon_phash = self.get_phash(f.name)
 
-            return (icon_name, icon_phash)
+            return icon_phash
 
     def get_app_info(self):
         """
@@ -94,12 +102,15 @@ def download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
     :param apk_tmp: apk temporary name
     :return: True if succeed, False otherwise
     """
-    index_file_path = '{}/.exodus/index.xml'.format(Path.home())
-    if not os.path.isfile(index_file_path):
-        logging.error("Could not find Fdroid index file")
-        return False
+    with NamedTemporaryFile() as f:
+        storage_helper = RemoteStorageHelper()
+        try:
+            storage_helper.get_file('fdroid_index.xml', f.name)
+            tree = ET.parse(f.name)
+        except Exception:
+            logging.error("Could not get Fdroid index from Minio")
+            return False
 
-    tree = ET.parse(index_file_path)
     root = tree.getroot()
     url = ''
     for child in root:
@@ -188,6 +199,70 @@ def download_google_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
 
     logging.error("Could not download '{}'".format(handle))
     return False
+
+
+def get_icon_from_store(handle, source, dest):
+    if source == "fdroid":
+        get_icon_from_fdroid(handle, dest)
+    else:
+        get_icon_from_gplay(handle, dest)
+
+
+def get_icon_from_fdroid(handle, dest):
+    """
+    Download the application icon from F-Droid website
+    :param handle: application handle
+    :param dest: file to be saved
+    :raises Exception: if unable to download icon
+    """
+    with NamedTemporaryFile() as f:
+        storage_helper = RemoteStorageHelper()
+        try:
+            storage_helper.get_file('fdroid_index.xml', f.name)
+            tree = ET.parse(f.name)
+        except Exception:
+            raise Exception("Could not get Fdroid index from Minio")
+
+    root = tree.getroot()
+    for child in root:
+        if child.tag != 'repo':
+            if child.attrib['id'] == handle:
+                icon = child.find('icon').text
+                icon_url = 'https://f-droid.org/repo/icons-640/{}'.format(icon)
+
+                f = requests.get(icon_url)
+                with open(dest, mode='wb') as fp:
+                    fp.write(f.content)
+                if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+                    return
+                else:
+                    break
+
+    raise Exception('Unable to download the icon from fdroid')
+
+
+def get_icon_from_gplay(handle, dest):
+    """
+    Download the application icon from Google Play website
+    :param handle: application handle
+    :param dest: file to be saved
+    :raises Exception: if unable to download icon
+    """
+    address = 'https://play.google.com/store/apps/details?id=%s' % handle
+    gplay_page_content = requests.get(address).text
+    soup = BeautifulSoup(gplay_page_content, 'html.parser')
+    icon_images = soup.find_all('img', {'alt': 'Cover art'})
+    if len(icon_images) > 0:
+        icon_url = '{}'.format(icon_images[0]['src'])
+        if not icon_url.startswith('http'):
+            icon_url = 'https:{}'.format(icon_url)
+        f = requests.get(icon_url)
+        with open(dest, mode='wb') as fp:
+            fp.write(f.content)
+        if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+            return
+
+    raise Exception('Unable to download the icon from GPlay')
 
 
 def clear_analysis_files(storage, tmp_dir, bucket, remove_from_storage=False):

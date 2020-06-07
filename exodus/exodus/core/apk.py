@@ -141,7 +141,7 @@ def start_static_analysis(params):
         if len(app_uid) < 16:
             raise Exception('Unable to compute the Universal Application ID')
 
-        icon_file, icon_phash = static_analysis.get_icon_and_phash(storage_helper, params.icon_name, params.source)
+        icon_phash = static_analysis.get_icon_and_phash(storage_helper, params.icon_name, params.source)
         if len(str(icon_phash)) < 16 and not request.apk:
             raise Exception('Unable to compute the icon perceptual hash')
     except Exception as e:
@@ -183,13 +183,12 @@ def start_static_analysis(params):
         icon_phash=icon_phash,
         app_uid=app_uid,
         source=params.source,
+        icon_path=params.icon_name,
     )
     if app_info is not None:
         app.name = app_info['title']
         app.creator = app_info['creator']
         app.downloads = app_info['downloads']
-    if icon_file != '':
-        app.icon_path = params.icon_name
     app.save(force_insert=True)
 
     apk = Apk(
