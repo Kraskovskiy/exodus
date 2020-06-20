@@ -237,4 +237,4 @@ class StaticAnalysisParameters:
         self.apk_name = '%s_%s.apk' % (self.bucket, self.query.handle)
         self.icon_name = '%s_%s.png' % (self.bucket, self.query.handle)
         self.class_list_file = '%s_%s.clist' % (self.bucket, self.query.handle)
-        self.source = analysis_query.source if analysis_query.source else 'gplay'
+        self.source = analysis_query.source if analysis_query.source else 'google'
