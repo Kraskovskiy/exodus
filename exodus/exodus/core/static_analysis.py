@@ -92,6 +92,24 @@ def download_apk(storage, handle, tmp_dir, apk_name, apk_tmp, source="google"):
     return ret
 
 
+def _get_fdroid_app_data(handle):
+    with NamedTemporaryFile() as f:
+        storage_helper = RemoteStorageHelper()
+        try:
+            storage_helper.get_file('fdroid_index.xml', f.name)
+            tree = ET.parse(f.name)
+        except Exception:
+            raise Exception("Could not get Fdroid index from Minio")
+
+    root = tree.getroot()
+    for child in root:
+        if child.tag != 'repo':
+            if child.attrib['id'] == handle:
+                return child
+
+    return None
+
+
 def download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
     """
     Download the APK from F-Droid for the given handle.
@@ -102,33 +120,26 @@ def download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
     :param apk_tmp: apk temporary name
     :return: True if succeed, False otherwise
     """
-    with NamedTemporaryFile() as f:
-        storage_helper = RemoteStorageHelper()
-        try:
-            storage_helper.get_file('fdroid_index.xml', f.name)
-            tree = ET.parse(f.name)
-        except Exception:
-            logging.error("Could not get Fdroid index from Minio")
-            return False
-
-    root = tree.getroot()
     url = ''
-    for child in root:
-        if child.tag != 'repo':
-            if child.attrib['id'] == handle:
-                for package in child.findall('package'):
-                    url = '{}/{}'.format(settings.FDROID_MIRROR, package.find('apkname').text)
-                    break
-    if url:
-        if not os.path.exists(tmp_dir):
-            os.mkdir(tmp_dir)
+    data = _get_fdroid_app_data(handle)
+    if not data:
+        return False
 
-        try:
-            r = requests.get(url)
-            open(apk_tmp, 'wb').write(r.content)
-        except Exception:
-            logging.error("Could not download '{}'".format(handle))
-            return False
+    for package in data.findall('package'):
+        url = '{}/{}'.format(settings.FDROID_MIRROR, package.find('apkname').text)
+        break
+
+    if not url:
+        return False
+
+    if not os.path.exists(tmp_dir):
+        os.mkdir(tmp_dir)
+
+    try:
+        r = requests.get(url)
+        open(apk_tmp, 'wb').write(r.content)
+    except Exception:
+        return False
 
     apk = Path(apk_tmp)
     if apk.is_file():
@@ -138,9 +149,8 @@ def download_fdroid_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
         except ResponseError as err:
             logging.error(err)
             return False
-
-    logging.error("Could not download '{}'".format(handle))
-    return False
+    else:
+        return False
 
 
 def download_google_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
@@ -197,7 +207,6 @@ def download_google_apk(storage, handle, tmp_dir, apk_name, apk_tmp):
                 logging.error(err)
                 return False
 
-    logging.error("Could not download '{}'".format(handle))
     return False
 
 
@@ -215,30 +224,18 @@ def get_icon_from_fdroid(handle, dest):
     :param dest: file to be saved
     :raises Exception: if unable to download icon
     """
-    with NamedTemporaryFile() as f:
-        storage_helper = RemoteStorageHelper()
-        try:
-            storage_helper.get_file('fdroid_index.xml', f.name)
-            tree = ET.parse(f.name)
-        except Exception:
-            raise Exception("Could not get Fdroid index from Minio")
+    data = _get_fdroid_app_data(handle)
+    if not data:
+        raise Exception('Unable to download the icon from fdroid')
 
-    root = tree.getroot()
-    for child in root:
-        if child.tag != 'repo':
-            if child.attrib['id'] == handle:
-                icon = child.find('icon').text
-                icon_url = 'https://f-droid.org/repo/icons-640/{}'.format(icon)
+    icon = data.find('icon').text
+    icon_url = 'https://f-droid.org/repo/icons-640/{}'.format(icon)
 
-                f = requests.get(icon_url)
-                with open(dest, mode='wb') as fp:
-                    fp.write(f.content)
-                if os.path.isfile(dest) and os.path.getsize(dest) > 0:
-                    return
-                else:
-                    break
-
-    raise Exception('Unable to download the icon from fdroid')
+    f = requests.get(icon_url)
+    with open(dest, mode='wb') as fp:
+        fp.write(f.content)
+    if not os.path.isfile(dest) or os.path.getsize(dest) == 0:
+        raise Exception('Unable to download the icon from fdroid')
 
 
 def get_icon_from_gplay(handle, dest):
